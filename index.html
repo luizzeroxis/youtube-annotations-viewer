@@ -21,6 +21,9 @@
 		color: rgb(26, 26, 26);
 		background-color: rgba(255,255,255,0.8)
 	}
+	.clickable {
+		cursor: pointer;
+	}
 </style>
 
 <div><label>YouTube URL: <input id='url' type='url' /></label></div>
@@ -41,6 +44,9 @@
 	var videoId = '';
 	var pw = 640;
 	var ph = 360;
+
+	var $ = (q) => document.querySelector(q);
+	var $$ = (q) => document.querySelectorAll(q);
 
 	var player;
 	var timeout = null;
@@ -75,10 +81,9 @@
 	document.getElementById('button-load').addEventListener('click', () => {
 
 		var url = document.getElementById('url').value;
+		var theurl = new URL(url, window.location);
 
-		var q = new URLSearchParams(url.slice(url.indexOf('?')))
-		var v = q.get('v');
-
+		var v = theurl.searchParams.get('v');
 		if (!v) {
 			v = url;
 		}
@@ -93,6 +98,9 @@
 	var showVideo = () => {
 
 		if (!videoId) {return;}
+
+		$('#url').value = videoId;
+
 		if (!youtubeLoaded) {return;}
 		if (!player) {
 			player = new YT.Player('player', {
@@ -103,11 +111,17 @@
 					'onStateChange': (e) => {
 						console.log(e.data);
 						if (e.data == YT.PlayerState.PLAYING) {
+							updateAnnotations();
 							timeout = setInterval(updateAnnotations, 10);
 						} else {
 							if (timeout) {
 								clearInterval(timeout);
 								timeout = null;
+							}
+							if (e.data == YT.PlayerState.PAUSED || e.data == YT.PlayerState.BUFFERING) {
+								updateAnnotations();
+							} else {
+								clearAnnotations();
 							}
 						}
 					}
@@ -247,6 +261,49 @@
 			var action = annotation.querySelector('action');
 			if (action) {
 				var actionType = action.getAttribute('type');
+				if (actionType == 'openUrl') {
+					var url = action.querySelector('url').getAttribute('value');
+					var theurl = new URL(url);
+
+					var youtubehosts = ['youtube.com', 'www.youtube.com'];
+
+					// check if video just goes into another point in this video
+					if (youtubehosts.includes(theurl.hostname) && theurl.pathname == '/watch') {
+
+						if (theurl.searchParams.get('v') == videoId) {
+							// same video, different time
+
+							var t = (new URLSearchParams(theurl.hash.substr(1))).get('t');
+							if (t) {
+								// why everything uses different formats???
+								t = convertToSeconds(t.replace('m',':').replace('s',''));
+							} else {
+								t = 0;
+							}
+
+							elem.onclick = () => {
+								player.seekTo(t, true);
+								updateAnnotations(t);
+							}
+						} else {
+							// different video
+							elem.onclick = () => {
+								videoId = theurl.searchParams.get('v');
+								showVideo();
+								getYouTubeAnnotations(videoId);
+							}
+						}
+
+					} else {
+						// not a video
+						elem.onclick = () => {
+							open(url, '_blank');
+						}
+					}
+
+					elem.classList.add('clickable');
+
+				}
 			}
 
 			//console.dir(elem);
@@ -275,14 +332,23 @@
 
 
 
-	updateAnnotations = () => {
-		var t = player.getCurrentTime();
+	updateAnnotations = (time) => {
+		var t = time;
+		if (time == null) {
+			t = player.getCurrentTime();
+		}
 		blocks.forEach(block => {
 			if (t >= block.start && t<= block.end) {
 				block.elem.style.display = 'inline-block';
 			} else {
 				block.elem.style.display = 'none';
 			}
+		})
+	}
+
+	clearAnnotations = () => {
+		blocks.forEach(block => {
+			block.elem.style.display = 'none';
 		})
 	}
 
