@@ -19,141 +19,158 @@
 		border: 1px dashed white;
 		font-family: sans-serif;
 		color: rgb(26, 26, 26);
-		background-color: rgba(255,255,255,0.8)
+		background-color: rgba(255,255,255,0.8);
+		white-space: pre-wrap;
 	}
 	.clickable {
 		cursor: pointer;
 	}
+	input[type='text'] {
+		width: 300px;
+	}
+	#text-input {
+		width: 640px;
+		height: 120px;
+	}
 </style>
 
-<div><label>YouTube URL: <input id='url' type='url' /></label></div>
-<!-- <div><label>XML annotations file: <input type='file' /></label></div> -->
-<div><button id='button-load'>Load</button></div>
+<div><label>YouTube URL: <input id='url' type='text' /></label> <button id='button-load'>Load video</button></div>
 
 <div id='player-wrapper'>
 	<div id='player'></div>
 	<div id='overlay'></div>
 </div>
 
-<label><input id='show-annotations' type='checkbox' checked />Show annotations</label>
+<div><label><input id='show-annotations' type='checkbox' checked />Show annotations</label></div>
+
+<div>Source:</div>
+
+<div><button id='button-from-youtube'>From YouTube</button></div>
+
+<textarea id='text-input' placeholder='Put some XML in here...'></textarea>
+<div><button id='button-load-annotations'>Load annotations</button></div>
+
+<!-- <div><label><input type='radio' name='source' id='source-none' />None</label></div>
+<div><label><input type='radio' name='source' id='source-yt' checked />From YouTube</label></div>
+
+<div><label><input type='radio' name='source' id='source-file' />From a file</label></div>
+	<div><input type='file' id='file-input' /> <button id='file-load'>Load</button></div>
+
+<div><label><input type='radio' name='source' id='source-url' />From a url</label></div>
+	<div><input type='text' id='url-input' /> <button id='url-load'>Load</button></div>
+
+<div><label><input type='radio' name='source' id='source-text' />From text</label></div>
+	<div><textarea id='text-input'></textarea> <button id='text-load'>Load</button></div> -->
 
 <p>By Luiz Pontes - <a href='https://github.com/luizeldorado/youtube-annotations-viewer'>Fork me on GitHub</a></p>
 
 <script>
 
-	var videoId = '';
 	var pw = 640;
 	var ph = 360;
+	var playerElementName = 'player';
+	var updateTime = 10;
+
+	var youTubeLoaded = false;
+	var player;
+	var currentVideo;
+	var currentAnnotations = [];
+	var updateInterval;
 
 	var $ = (q) => document.querySelector(q);
 	var $$ = (q) => document.querySelectorAll(q);
 
-	var player;
-	var timeout = null;
-	var blocks = [];
-	var overlay	= document.getElementById('overlay')
-
-	var convertToSeconds = (string) => {
-		var colonSplit = string.split(':');
-		var total = 0;
-		colonSplit.forEach((split, i) => {
-			total += parseFloat(split) * (Math.pow(60,(colonSplit.length - i - 1)));
-		})
-		return total;
-	}
-
-	var convertDecimalAndAlphaToRGBAColor = (decimal, alpha) => {
-		var r = Math.floor(decimal / (256*256));
-		var g = Math.floor(decimal / 256) % 256;
-		var b = decimal % 256;
-		return 'rgba('+r+','+g+','+b+','+alpha+')'
-	}
-
-	var get = (value, def) => (value ? value : (def ? def : value)); //what
-
-	var youtubeLoaded = false;
+	// YouTube API function
 	function onYouTubeIframeAPIReady() {
-		console.log('Youtube LOADED');
-		youtubeLoaded = true;
-		showVideo();
+		youTubeLoaded = true;
+		console.log('YouTube API LOADED');
+
+		if (currentVideo) {
+			createPlayer();
+		} // if theres not video, it will be created when video is requested
 	}
 
-	document.getElementById('button-load').addEventListener('click', () => {
+	var createPlayer = () => {
+		player = new YT.Player(playerElementName, {
+			videoId: currentVideo,
+			width: pw,
+			height: ph,
+			playerVars: {
+				'modestbranding': 1,
+				'showinfo': 0,
+			},
+			events: {
+				'onStateChange': youTubeStateChange
+			},
+		})
+		console.log('Player CREATED');
+	}
 
-		var url = document.getElementById('url').value;
-		var theurl = new URL(url, window.location);
+	var youTubeStateChange = (e) => {
 
-		var v = theurl.searchParams.get('v');
-		if (!v) {
-			v = url;
+		if (updateInterval) {
+			clearInterval(updateInterval);
+			updateInterval = null;
 		}
 
-		videoId = v;
+		switch (e.data) {
+			case YT.PlayerState.PLAYING:
+				updateInterval = setInterval(updateAnnotations, updateTime);
+				break;
 
-		showVideo();
-		getYouTubeAnnotations(videoId);
-		
-	});
+			case YT.PlayerState.PLAYING:
+			case YT.PlayerState.BUFFERING:
+			case YT.PlayerState.PAUSED:
+				updateAnnotations();
+				break;
 
-	var showVideo = () => {
-
-		if (!videoId) {return;}
-
-		$('#url').value = videoId;
-
-		if (!youtubeLoaded) {return;}
-		if (!player) {
-			player = new YT.Player('player', {
-				width: pw,
-				height: ph,
-				videoId: videoId,
-				events: {
-					'onStateChange': (e) => {
-						console.log(e.data);
-						if (e.data == YT.PlayerState.PLAYING) {
-							updateAnnotations();
-							timeout = setInterval(updateAnnotations, 10);
-						} else {
-							if (timeout) {
-								clearInterval(timeout);
-								timeout = null;
-							}
-							if (e.data == YT.PlayerState.PAUSED || e.data == YT.PlayerState.BUFFERING) {
-								updateAnnotations();
-							} else {
-								clearAnnotations();
-							}
-						}
-					}
-				},
-				playerVars: {
-					'modestbranding': 1,
-					'showinfo': 0,
-				}
-			});
-		} else {
-			player.cueVideoById({videoId: videoId})
+			case YT.PlayerState.CUED:
+			case YT.PlayerState.ENDED:
+			case YT.PlayerState.UNSTARTED:
+				clearAnnotations();
+				break;
 		}
 	}
 
-	var getYouTubeAnnotations = () => {
+	var setVideo = (video) => {
+		currentVideo = video;
 
-		blocks = [];
-		overlay.innerText = '';
-
-		fetch('https://cors-anywhere.herokuapp.com/https://www.youtube.com/annotations_invideo?features=1&legacy=1&video_id='+videoId)
-			.then(response => response.text())
-			.then(text => {
-
-				console.log('Annotations LOADED')
-
-				blocks = parseAnnotations(text);
-				blocks.forEach(a => overlay.appendChild(a.elem));
-				
-			})
+		if (player) {
+			player.cueVideoById({videoId: currentVideo});
+		} else if (youTubeLoaded) {
+			createPlayer();
+		}
+		// when it loads, it will get currentVideo and load that
 	}
 
-	var parseAnnotations = (text) => {
+	var setAnnotations = (ann) => {
+		currentAnnotations = ann;
+
+		$('#overlay').textContent = '';
+		currentAnnotations.forEach(a => {
+			$('#overlay').appendChild(a.elem);
+		})
+	}
+
+	var updateAnnotations = (time) => {
+		if (!time) time = player.getCurrentTime();
+
+		currentAnnotations.forEach(a => {
+			if (time >= a.start && time <= a.end) {
+				a.elem.style.display = 'inline-block';
+			} else {
+				a.elem.style.display = 'none';
+			}
+		})
+	}
+
+	var clearAnnotations = () => {
+		currentAnnotations.forEach(a => {
+			a.elem.style.display = 'none';
+		})
+	}
+
+	var parseXMLToAnnotations = (text) => {
 
 		var allAnnotations = [];
 
@@ -162,195 +179,205 @@
 
 		var annotations = xml.querySelectorAll('annotations annotation');
 		annotations.forEach(annotation => {
+			allAnnotations.push(parseAnnotation(annotation))
+		})
 
-			var elem = document.createElement('div');
-			elem.classList.add('annotation');
+		return allAnnotations;
+	}
 
-			// text
-			var text = annotation.querySelector('TEXT');
+	var parseAnnotation = (annotation) => {
 
-			if (text) {
-				elem.textContent = text.textContent;
+		var elem = document.createElement('div');
+		var timeStart, timeEnd;
+
+		elem.classList.add('annotation');
+
+		var aType = annotation.getAttribute('type');
+
+		if (['text', 'highlight'].includes(aType)) {
+
+			var TEXT = annotation.querySelector('TEXT');
+			if (TEXT) {
+				elem.textContent = TEXT.textContent;
 			}
 
-			// moving regions
 			var movingRegion = annotation.querySelector('segment movingRegion');
-
-			var left, top, width, height, timestart, timeend;
-
-			if (movingRegion.getAttribute('type') == 'rect') {
-
-				var rectRegions = movingRegion.querySelectorAll('rectRegion');
-
-				left = rectRegions[0].getAttribute('x') * pw/100 + 'px';
-				top = rectRegions[0].getAttribute('y') * ph/100 + 'px';
-				width = rectRegions[0].getAttribute('w') * pw/100 + 'px';
-				height = rectRegions[0].getAttribute('h') * ph/100 + 'px';
-
-				timestart = convertToSeconds(rectRegions[0].attributes.t.value)
-				timeend = convertToSeconds(rectRegions[1].attributes.t.value)
-
-			} else if (movingRegion.getAttribute('type') == 'anchored') {
-
-				var anchoredRegions = movingRegion.querySelectorAll('anchoredRegion');
-
-				left = anchoredRegions[0].getAttribute('x') * pw/100 + 'px';
-				top = anchoredRegions[0].getAttribute('y') * ph/100 + 'px';
-				width = anchoredRegions[0].getAttribute('w') * pw/100 + 'px';
-				height = anchoredRegions[0].getAttribute('h') * ph/100 + 'px';
-
-				// anchor points for the dialog
-				// sx = anchoredRegions[0].getAttribute('sx') * pw/100 + 'px';
-				// sy = anchoredRegions[0].getAttribute('sy') * ph/100 + 'px';
-
-				timestart = convertToSeconds(anchoredRegions[0].getAttribute('t'))
-				timeend = convertToSeconds(anchoredRegions[1].getAttribute('t'))
-
-			} else {
-				console.log('NEW TYPE!! ' + movingRegion.getAttribute('type'));
-			}
-
-			elem.style.left = left;
-			elem.style.top = top;
-			elem.style.width = width;
-			elem.style.height = height;
-
-			// appearance
-			var appearance = annotation.querySelector('appearance');
-
-			if (appearance) {
-				if (annotation.getAttribute('type') == 'text') {
-					if (appearance.hasAttribute('fgColor')) {
-						elem.style.color = convertDecimalAndAlphaToRGBAColor(
-							appearance.getAttribute('fgColor'), 1
-						);
-					}
-
-					if (appearance.hasAttribute('bgColor')) {
-						elem.style.backgroundColor = convertDecimalAndAlphaToRGBAColor(
-							appearance.getAttribute('bgColor'),
-							get( appearance.getAttribute('bgAlpha'), 1 )
-						);
-					}
-
-					if (appearance.hasAttribute('textSize')) {
-						elem.style.fontSize = appearance.getAttribute('textSize') * ph/100 + 'px';
-					}
-				} else if (annotation.getAttribute('type') == 'highlight') {
-
-					elem.style.borderStyle = 'solid';
-					elem.style.backgroundColor = 'rgba(0,0,0,0)';
-
-					if (appearance.hasAttribute('bgColor')) {
-						elem.style.borderColor = convertDecimalAndAlphaToRGBAColor(
-							appearance.getAttribute('bgColor'),
-							1 - get( appearance.getAttribute('borderAlpha'), 0 )
-						);
-					}
-
-					if (appearance.hasAttribute('highlightWidth')) {
-						elem.style.borderWidth = appearance.getAttribute('highlightWidth') + 'px';
-					}
-
-				} else {
-					console.log('NEW annotaiton TYPE!! ' + annotation.getAttribute('type'));
+			if (movingRegion) {
+				var movingRegionType = movingRegion.getAttribute('type');
+				var regions;
+				if (movingRegionType == 'rect') {
+					regions = movingRegion.querySelectorAll('rectRegion');
 				}
+				if (movingRegionType == 'anchored') {
+					regions = movingRegion.querySelectorAll('anchoredRegion');
+				}
+
+				elem.style.left		= regions[0].getAttribute('x') * pw/100 + 'px';
+				elem.style.top 		= regions[0].getAttribute('y') * ph/100 + 'px';
+				elem.style.width 	= regions[0].getAttribute('w') * pw/100 + 'px';
+				elem.style.height 	= regions[0].getAttribute('h') * ph/100 + 'px';
+
+				timeStart = convertToSeconds(regions[0].getAttribute('t')) //these can be 'never' sometimes
+				timeEnd = convertToSeconds(regions[1].getAttribute('t'))
 			}
 
-			// action
+			var appearance = annotation.querySelector('appearance');
+			if (appearance) {
+				
+				var fgColor = appearance.getAttribute('fgColor');
+				var bgColor = appearance.getAttribute('bgColor');
+				var bgAlpha = appearance.getAttribute('bgAlpha');
+				var borderAlpha = appearance.getAttribute('borderAlpha');
+				var highlightWidth = appearance.getAttribute('highlightWidth');
+
+				if (fgColor) {
+					elem.style.color = decimalColorToRGBColor(fgColor);
+				}
+
+				if (aType == 'text') {
+					if (bgColor) {
+						elem.style.backgroundColor = decimalColorToRGBColor(bgColor, bgAlpha);
+					}
+				} else if (aType == 'highlight') {
+					if (bgColor) {
+						elem.style.borderColor = decimalColorToRGBColor(bgColor, borderAlpha ? (1-borderAlpha) : 1);
+					}
+					if (highlightWidth) {
+						elem.style.borderWidth = highlightWidth + 'px';
+					}
+				}
+
+			}
+
 			var action = annotation.querySelector('action');
 			if (action) {
 				var actionType = action.getAttribute('type');
 				if (actionType == 'openUrl') {
-					var url = action.querySelector('url').getAttribute('value');
-					var theurl = new URL(url);
+					var actionUrl = action.querySelector('url');
+					if (actionUrl) {
 
-					var youtubehosts = ['youtube.com', 'www.youtube.com'];
+						elem.classList.add('clickable')
 
-					// check if video just goes into another point in this video
-					if (youtubehosts.includes(theurl.hostname) && theurl.pathname == '/watch') {
+						var url = actionUrl.getAttribute('value');
+						var urlObject = new URL(url);
 
-						if (theurl.searchParams.get('v') == videoId) {
-							// same video, different time
+						if (['youtube.com', 'www.youtube.com'].includes(urlObject.hostname)
+							&& urlObject.pathname == '/watch') {
+							// This is a youtube video
 
-							var t = (new URLSearchParams(theurl.hash.substr(1))).get('t');
-							if (t) {
-								// why everything uses different formats???
-								t = convertToSeconds(t.replace('m',':').replace('s',''));
+							if (urlObject.searchParams.get('v') == currentVideo) {
+								// This is the same video
+
+								// Check if it has some timestamp
+								var time = (new URLSearchParams(urlObject.hash.substr(1))).get('t');
+								time = time ? time : 0;
+								time = convertToSeconds(time);
+
+								elem.onclick = () => {
+									player.seekTo(time, true);
+									updateAnnotations(time);
+								}
+
 							} else {
-								t = 0;
-							}
-
-							elem.onclick = () => {
-								player.seekTo(t, true);
-								updateAnnotations(t);
+								// This is a different video
+								elem.onclick = () => setVideo(urlObject.searchParams.get('v'));
 							}
 						} else {
-							// different video
-							elem.onclick = () => {
-								videoId = theurl.searchParams.get('v');
-								showVideo();
-								getYouTubeAnnotations(videoId);
-							}
+							// This is a normal link
+							elem.onclick = () => window.open(url, '_blank');
 						}
 
-					} else {
-						// not a video
-						elem.onclick = () => {
-							open(url, '_blank');
-						}
 					}
-
-					elem.classList.add('clickable');
-
+				} else {
+					console.log('New action type: '+actionType);
 				}
 			}
 
-			//console.dir(elem);
+		} else {
+			console.log('New type: ' + aType);
+		}
 
-			allAnnotations.push({
-				elem: elem,
-				start: timestart,
-				end: timeend,
-				//action: 
-			})
-		})
-
-		return allAnnotations;
+		return {
+			elem: elem,
+			start: timeStart,
+			end: timeEnd
+		};
 
 	}
 
-	
+	var annotationsFromYouTube = (video) => {
+		var youTubeURL = 'https://www.youtube.com/annotations_invideo?features=1&legacy=1&video_id=' + video;
+		var proxyURL = 'https://cors-anywhere.herokuapp.com/' + youTubeURL;
+		// Because of CORS, we have to use a server to contact with YouTube. Fuck you, Google
 
-	document.getElementById('show-annotations').addEventListener('click', (e) => {
+		return fetch(proxyURL)
+			.then(response => response.text())
+	}
+
+	var parseYouTubeURL = (url) => {
+		// Check if it's a YouTube URL, or something similar
+		// TODO: try-catch?
+		var urlObject = new URL(url, window.location);
+
+		if (urlObject.searchParams.has('v')) {
+			return urlObject.searchParams.get('v');
+		} else if (url !== '') {
+			return url;
+		}
+	}
+
+	var convertToSeconds = (string) => {
+		string = string.replace('m',':').replace('s','');
+
+		var colonSplit = string.split(':');
+		var total = 0;
+		colonSplit.forEach((split, i) => {
+			total += parseFloat(split) * (Math.pow(60,(colonSplit.length - i - 1)));
+		})
+		return total;
+	}
+
+	var decimalColorToRGBColor = (decimal, alpha) => {
+		var r = Math.floor(decimal / (256*256));
+		var g = Math.floor(decimal / 256) % 256;
+		var b = decimal % 256;
+
+		return
+			(alpha == null)
+			? 'rgb('+r+','+g+','+b+')'
+			: 'rgba('+r+','+g+','+b+','+alpha+')'
+	}
+
+	$('#button-load').addEventListener('click', () => {
+
+		var url = $('#url').value;
+		setVideo(parseYouTubeURL(url));
+
+	});
+
+	$('#show-annotations').addEventListener('click', (e) => {
 		if (e.target.checked) {
-			document.getElementById('overlay').style.display = 'block';
+			$('#overlay').style.display = 'block';
 		} else {
-			document.getElementById('overlay').style.display = 'none';
+			$('#overlay').style.display = 'none';
 		}
 	});
 
+	$('#button-from-youtube').addEventListener('click', (e) => {
+		// TODO Disable text area?
+		annotationsFromYouTube(currentVideo)
+			.then(text => {
+				console.log('Annotations LOADED');
 
+				$('#text-input').value = text;
+				// TODO Enable text area?
+			})
+	})
 
-	updateAnnotations = (time) => {
-		var t = time;
-		if (time == null) {
-			t = player.getCurrentTime();
-		}
-		blocks.forEach(block => {
-			if (t >= block.start && t<= block.end) {
-				block.elem.style.display = 'inline-block';
-			} else {
-				block.elem.style.display = 'none';
-			}
-		})
-	}
-
-	clearAnnotations = () => {
-		blocks.forEach(block => {
-			block.elem.style.display = 'none';
-		})
-	}
+	$('#button-load-annotations').addEventListener('click', (e) => {
+		setAnnotations( parseXMLToAnnotations( $('#text-input').value ) );
+		console.log('Annotations actually set');
+	})
 
 </script>
 
